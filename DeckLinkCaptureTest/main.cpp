@@ -338,82 +338,50 @@ public:
 		printf("[%llu.%06llu] Device #%u: Frame %02u:%02u:%02u:%03u arrived\n", hwTime / kMicroSecondsTimeScale, hwTime % kMicroSecondsTimeScale, m_index, hours, minutes, seconds, frames);
 
 		// now we actually extract the frame and do something with it
-		// probably save to video using OpenCV0
 
-
-
-
-		void* p_frameBytes;
-		videoFrame->GetBytes(&p_frameBytes);
-
+		// get height, width, bytes per row, and pixel format of raw frame
+		// captured from DeckLink
 		const auto frameHeight = (int32_t)videoFrame->GetHeight();
 		const auto frameWidth = (int32_t)videoFrame->GetWidth();
 		const auto rowBytes = videoFrame->GetRowBytes();
 		printf("Width: %d; Height: %d; total bytes per row: %d\n", frameWidth, frameHeight, rowBytes);
+		printf("Raw pixel format: 0x%0X\n", videoFrame->GetPixelFormat());
 
-		printf("pixel format: 0x%0X\n", videoFrame->GetPixelFormat());
-
-
-		// create a instance of the BMD frame converter
-		// using literal black magic?
-		// or maybe just COM programming
-		//IDeckLinkVideoConversion* deckLinkFrameConverter = NULL;
-		//CComPtr<IDeckLinkVideoConversion>	frameConverter;
-		//if (frameConverter->CoCreateInstance(CLSID_CDeckLinkVideoConversion, nullptr, CLSCTX_ALL) != S_OK) {
-		//	printf("Failed creating frame converter...\n");
-		//}
-
-		/*
-		// now we need to create the video frame
-		//CComPtr<IDeckLinkOutput> dummyDeckLinkOutput;
-		//CComPtr<IDeckLinkMutableVideoFrame>	newFrame;
-		IDeckLinkVideoConversion* frameConverter = NULL;
-		IDeckLinkOutput* dummyDeckLinkOutput = NULL;
-		Uyvy16VideoFrame* newFrame = NULL;
-		*/
-
+		// create a new frame in 8 bit YUV (4:2:2 UYVY format)
+		// and use BMD tools to convert raw frame into this intermediate format
+		// which can be accepted (with conversion) into OpenCV
+		// TODO: we lose bit depth here! can we push 10-bit 4:2:2 into 16-bit for openCV?
+		// TODO: check name of frame class, is it really 16??
 		m_newFrame = new Uyvy16VideoFrame(videoFrame->GetWidth(), videoFrame->GetHeight(), videoFrame->GetFlags());
-
 		m_frameConverter->ConvertFrame((IDeckLinkVideoFrame*) videoFrame, m_newFrame);
+		printf("Pixel format after BMD frame conversion: 0x%0X\n", m_newFrame->GetPixelFormat());  // this check is really a bit silly, we directly set this value in our own frame class...
+
+		// assign pointer to raw pixel bytes in the new frame
 		m_newFrame->GetBytes((void**)&m_deckLinkBuffer);
-		
 
+		// create OpenCV frames for the YUV and BGR frames
+		cv::Mat cvFrameYUV8(frameHeight, frameWidth, CV_8UC2);
+		cv::Mat cvFrameBGR8(frameHeight, frameWidth, CV_8UC3);
 
-		/**/
-
-		cv::Mat frameCPU(frameHeight, frameWidth, CV_8UC1);
-		//cv::UMat image(frameHeight, frameWidth, CV_8UC3);
-		//cv::cvtColor(frameCPU, image, cv::COLOR_YUV2BGR_Y422);
-		//cv::imshow("Preview", image);
-		//cv::imwrite("C:\\Users\\f002r5k\\Desktop\\test.tif", image);
-		//while (1) {};
-		// could call videoFrame->GetBytes(byteBuffer) to get pointer to pixel bytes 
-
-		//uint32_t word0 = 0;
-		//uint32_t word1 = 0;
-		//uint32_t word2 = 0;
-		//uint32_t word3 = 0;
-
-		// encode grayscale info directly in the pixls of the OpenCV matrix
-		uint8_t* frameData = frameCPU.data;
-		
-		
+		// encode intermediate BMD frame directly in the pixels of the OpenCV MAT object
+		uint8_t* frameData = cvFrameYUV8.data;		
 		unsigned long writeByteIdx = 0;
-		unsigned long readByteIdx = 0;
-		CHAR byte0 = 0;
-		CHAR byte1 = 0;
-		CHAR byte2 = 0;
-		CHAR byte3 = 0;
-		
-		m_deckLinkBuffer += 1;
-		for (writeByteIdx = 0; writeByteIdx < frameHeight * frameWidth; ++writeByteIdx) {
+		unsigned long readByteIdx = 0;		
+		for (writeByteIdx = 0; writeByteIdx < 2*(frameHeight * frameWidth); ++writeByteIdx) {
 
 			*frameData = (uint8_t) * ((CHAR*)m_deckLinkBuffer);
 			++frameData;
-			m_deckLinkBuffer += 2;
-		}
+			++m_deckLinkBuffer;
+		}	
 
-		cv::imwrite("C:\\Users\\f002r5k\\Desktop\\test.tif", frameCPU);
+		// convert YUV 4:2:2 to BGR in OpenCV
+		cv::cvtColor(cvFrameYUV8, cvFrameBGR8, cv::COLOR_YUV2BGR_UYVY);
+
+		// save the frame to file
+		cv::imwrite("C:\\Users\\f002r5k\\Desktop\\test.tif", cvFrameBGR8);
+		
+		// hang here, for now...
+		// TODO: stream to video file, and make sure we release everything properly in the destructor
 		while (1) {};
 
 		return S_OK;
