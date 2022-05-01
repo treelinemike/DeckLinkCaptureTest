@@ -3,7 +3,8 @@
 #include <opencv2/opencv.hpp>
 #include "platform.h"
 #include "DeckLinkAPI_h.h"
-#include "Uyvy16VideoFrame.h"
+#include "Uyvy8VideoFrame.h"
+#include "Xle10VideoFrame.h"
 #include <array>
 #include <thread>
 #include <mutex>
@@ -14,6 +15,7 @@
 #define kDeviceCount 2
 
 using namespace std;
+using namespace cv;
 
 // Video mode parameters
 const BMDDisplayMode      kDisplayMode = bmdModeHD1080i5994;
@@ -352,7 +354,7 @@ public:
 		// which can be accepted (with conversion) into OpenCV
 		// TODO: we lose bit depth here! can we push 10-bit 4:2:2 into 16-bit for openCV?
 		// TODO: check name of frame class, is it really 16??
-		m_newFrame = new Uyvy16VideoFrame(videoFrame->GetWidth(), videoFrame->GetHeight(), videoFrame->GetFlags());
+		m_newFrame = new Uyvy8VideoFrame(videoFrame->GetWidth(), videoFrame->GetHeight(), videoFrame->GetFlags());
 		m_frameConverter->ConvertFrame((IDeckLinkVideoFrame*) videoFrame, m_newFrame);
 		printf("Pixel format after BMD frame conversion: 0x%0X\n", m_newFrame->GetPixelFormat());  // this check is really a bit silly, we directly set this value in our own frame class...
 
@@ -380,6 +382,55 @@ public:
 		// save the frame to file
 		cv::imwrite("C:\\Users\\f002r5k\\Desktop\\test.tif", cvFrameBGR8);
 		
+		// try 10 bit
+		m_newFrameXLE = new Xle10VideoFrame(videoFrame->GetWidth(), videoFrame->GetHeight(), videoFrame->GetFlags());
+		m_frameConverter->ConvertFrame((IDeckLinkVideoFrame*)videoFrame, m_newFrameXLE);
+		printf("Pixel format after BMD frame conversion: 0x%0X\n", m_newFrameXLE->GetPixelFormat());  // this check is really a bit silly, we directly set this value in our own frame class...
+
+		// assign pointer to raw pixel bytes in the new frame
+		m_newFrameXLE->GetBytes((void**)&m_deckLinkBuffer);
+
+		// NOW... let's try to get the 10-bit frame values into a 16-bit frame
+		cv::Mat cvFrameBGR16(frameHeight, frameWidth, CV_16UC3);
+		uint16_t* p_cvFrameBGR16 = (uint16_t*)cvFrameBGR16.data;
+		uint32_t localPixelData = 0;
+		CHAR* p_localPixelData;
+		for (unsigned int pixelIdx = 0; pixelIdx < (frameWidth * frameHeight); pixelIdx++)
+		{
+
+			// read next four bytes from deckLinkBuffer into a 32-bit word
+			CHAR* p_localPixelData = (CHAR*)&localPixelData;
+			for (unsigned int byteIdx = 0; byteIdx < 4; byteIdx++)
+			{
+				*p_localPixelData = (CHAR) * ((CHAR*)m_deckLinkBuffer);
+				++m_deckLinkBuffer;
+				++p_localPixelData;
+			}
+
+			//printf("0x%08X\n", localPixelData);
+
+			// extract three 10-bit components from 32-bit word,
+			// convert each to 16-bit representations,
+			// and write out to the 16-bit OpenCV image
+			uint32_t bitMask = 0;
+			uint32_t componentValue10Bit = 0;
+			for (unsigned int componentIdx = 0; componentIdx < 3; componentIdx++)
+			{
+				bitMask = 0xFFC << (10 * componentIdx);
+				componentValue10Bit = (localPixelData & bitMask) >> (10 * componentIdx + 2);
+				*p_cvFrameBGR16 = (uint16_t)(((double)componentValue10Bit) * (65535.0 / 1023.0));
+				++p_cvFrameBGR16;
+			}
+		}
+
+		// add something to the frame
+		char mystr[255];
+		sprintf_s(mystr, "Frame #%03d", 001);
+		putText(cvFrameBGR16, (string)mystr, Point(50, cvFrameBGR16.rows / 2), FONT_HERSHEY_SIMPLEX, 5.0, CV_RGB(65535, 65535, 0), 10);
+
+		// save the frame to file
+		cv::imwrite("C:\\Users\\f002r5k\\Desktop\\test16.tif", cvFrameBGR16);
+
 		// hang here, for now...
 		// TODO: stream to video file, and make sure we release everything properly in the destructor
 		while (1) {};
@@ -432,7 +483,8 @@ private:
 	std::mutex										m_mutex;
 	std::condition_variable							m_signalCondition;
 	IDeckLinkVideoConversion* m_frameConverter = NULL;
-	Uyvy16VideoFrame* m_newFrame = NULL;
+	Uyvy8VideoFrame* m_newFrame = NULL;
+	Xle10VideoFrame* m_newFrameXLE = NULL;
 	CHAR* m_deckLinkBuffer = NULL;
 
 };

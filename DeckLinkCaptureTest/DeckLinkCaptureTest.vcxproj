@@ -149,10 +149,14 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="platform.cpp" />
     <ClCompile Include="Uyvy16VideoFrame.cpp" />
+    <ClCompile Include="Uyvy8VideoFrame.cpp" />
+    <ClCompile Include="Xle10VideoFrame.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="platform.h" />
     <ClInclude Include="Uyvy16VideoFrame.h" />
+    <ClInclude Include="Uyvy8VideoFrame.h" />
+    <ClInclude Include="Xle10VideoFrame.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
