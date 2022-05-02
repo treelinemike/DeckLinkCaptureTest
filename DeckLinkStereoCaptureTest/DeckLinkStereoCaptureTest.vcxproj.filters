@@ -14,7 +14,7 @@
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
     <Filter Include="DeckLinkAPI">
-      <UniqueIdentifier>{b61ec5df-c7a1-4fe6-adcc-3c37d559195b}</UniqueIdentifier>
+      <UniqueIdentifier>{46b8c65b-1427-4494-99a7-ea6b6aafb487}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
@@ -23,33 +23,33 @@
     </Midl>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="DeckLinkAPI_i.c">
+      <Filter>DeckLinkAPI</Filter>
+    </ClCompile>
     <ClCompile Include="main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="platform.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="Uyvy16VideoFrame.cpp">
+    <ClCompile Include="Uyvy8VideoFrame.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="Uyvy8VideoFrame.cpp">
+    <ClCompile Include="Uyvy16VideoFrame.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Xle10VideoFrame.cpp">
       <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="DeckLinkAPI_i.c">
-      <Filter>DeckLinkAPI</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="platform.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Uyvy16VideoFrame.h">
+    <ClInclude Include="Uyvy8VideoFrame.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Uyvy8VideoFrame.h">
+    <ClInclude Include="Uyvy16VideoFrame.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Xle10VideoFrame.h">
