@@ -30,7 +30,7 @@ const BMDDisplayMode      kDisplayMode = bmdModeHD1080i5994;
 		bmdVideoInputSynchronizeToCaptureGroup	= ( 1 << 2 )
 	} ;
 	*/
-const BMDVideoInputFlags  kInputFlag = bmdVideoInputFlagDefault;
+const BMDVideoInputFlags  kInputFlag = bmdVideoInputDualStream3D;
 const BMDPixelFormat      kPixelFormat = bmdFormat10BitYUV;
 
 // Frame parameters
@@ -159,6 +159,18 @@ public:
 			goto bail;
 		}
 
+		// Set 3D format to capture separate streams
+		// Equivalent of checking "Capture two independent streams as 3D" in Blackmagic Media Express
+		// TODO: don't fully understand how this works, but it does appear to allow capture from da Vinci S imaging system
+		// as long as the LEFT CCU Ext Ref output is piped into the RIGHT CCU Sync input
+		result = m_deckLinkConfig->SetFlag(bmdDeckLinkConfigSDIInput3DPayloadOverride, true);
+		if (result != S_OK)
+		{
+			fprintf(stderr, "Could not set 3D override flag\n");
+		}
+		else {
+			printf("3D override flag set successfully!\n");
+		}
 
 		// Set the synchronized capture group number. This can be any 32-bit number
 		// All devices enabled for synchronized capture with the same group number are started together
@@ -312,6 +324,55 @@ public:
 		return result;
 	}
 
+	// convert video frame into something we can deal with using OpenCV
+// p_outputFrame should be a pointer to something like:  cv::Mat cvFrameBGR8(frameHeight, frameWidth, CV_8UC3);
+	HRESULT extractCVMat8(IDeckLinkVideoFrame* videoFrame, cv::Mat* p_outputMatrix) {
+
+		// get height, width, bytes per row, and pixel format of raw frame
+		// captured from DeckLink
+		const auto frameHeight = (int32_t)videoFrame->GetHeight();
+		const auto frameWidth = (int32_t)videoFrame->GetWidth();
+		const auto rowBytes = videoFrame->GetRowBytes();
+		printf("Width: %d; Height: %d; total bytes per row: %d\n", frameWidth, frameHeight, rowBytes);
+		printf("Raw pixel format: 0x%0X\n", videoFrame->GetPixelFormat());
+
+		// create a new frame in 8 bit YUV (4:2:2 UYVY format)
+		// and use BMD tools to convert raw frame into this intermediate format
+		// which can be accepted (with conversion) into OpenCV
+		// TODO: we lose bit depth here! can we push 10-bit 4:2:2 into 16-bit for openCV?
+		// TODO: check name of frame class, is it really 16??
+		Uyvy8VideoFrame* uyuv8Frame = NULL;
+		uyuv8Frame = new Uyvy8VideoFrame(videoFrame->GetWidth(), videoFrame->GetHeight(), videoFrame->GetFlags());
+		m_frameConverter->ConvertFrame((IDeckLinkVideoFrame*)videoFrame, uyuv8Frame);
+		printf("Pixel format after BMD frame conversion: 0x%0X\n", uyuv8Frame->GetPixelFormat());  // this check is really a bit silly, we directly set this value in our own frame class...
+
+		// assign pointer to raw pixel bytes in the new frame
+		uyuv8Frame->GetBytes((void**)&m_deckLinkBuffer);
+
+		// create OpenCV frames for the YUV and BGR frames
+		cv::Mat cvFrameYUV8(frameHeight, frameWidth, CV_8UC2);
+
+		// encode intermediate BMD frame directly in the pixels of the OpenCV MAT object
+		uint8_t* frameData = cvFrameYUV8.data;
+		unsigned long writeByteIdx = 0;
+		unsigned long readByteIdx = 0;
+		for (writeByteIdx = 0; writeByteIdx < 2 * (frameHeight * frameWidth); ++writeByteIdx) {
+
+			*frameData = (uint8_t) * ((CHAR*)m_deckLinkBuffer);
+			++frameData;
+			++m_deckLinkBuffer;
+		}
+
+		// release the new frame object
+		uyuv8Frame->Release();
+
+		// convert YUV 4:2:2 to BGR in OpenCV
+		cv::cvtColor(cvFrameYUV8, *p_outputMatrix, cv::COLOR_YUV2BGR_UYVY);
+
+		// done
+		return S_OK;
+	}
+
 	HRESULT frameArrived(IDeckLinkVideoInputFrame* videoFrame)
 	{
 		BMDTimeValue time;
@@ -339,8 +400,6 @@ public:
 
 		printf("[%llu.%06llu] Device #%u: Frame %02u:%02u:%02u:%03u arrived\n", hwTime / kMicroSecondsTimeScale, hwTime % kMicroSecondsTimeScale, m_index, hours, minutes, seconds, frames);
 
-		// now we actually extract the frame and do something with it
-
 		// get height, width, bytes per row, and pixel format of raw frame
 		// captured from DeckLink
 		const auto frameHeight = (int32_t)videoFrame->GetHeight();
@@ -349,40 +408,36 @@ public:
 		printf("Width: %d; Height: %d; total bytes per row: %d\n", frameWidth, frameHeight, rowBytes);
 		printf("Raw pixel format: 0x%0X\n", videoFrame->GetPixelFormat());
 
-		// create a new frame in 8 bit YUV (4:2:2 UYVY format)
-		// and use BMD tools to convert raw frame into this intermediate format
-		// which can be accepted (with conversion) into OpenCV
-		// TODO: we lose bit depth here! can we push 10-bit 4:2:2 into 16-bit for openCV?
-		// TODO: check name of frame class, is it really 16??
-		m_newFrame = new Uyvy8VideoFrame(videoFrame->GetWidth(), videoFrame->GetHeight(), videoFrame->GetFlags());
-		m_frameConverter->ConvertFrame((IDeckLinkVideoFrame*) videoFrame, m_newFrame);
-		printf("Pixel format after BMD frame conversion: 0x%0X\n", m_newFrame->GetPixelFormat());  // this check is really a bit silly, we directly set this value in our own frame class...
-
-		// assign pointer to raw pixel bytes in the new frame
-		m_newFrame->GetBytes((void**)&m_deckLinkBuffer);
-
-		// create OpenCV frames for the YUV and BGR frames
-		cv::Mat cvFrameYUV8(frameHeight, frameWidth, CV_8UC2);
-		cv::Mat cvFrameBGR8(frameHeight, frameWidth, CV_8UC3);
-
-		// encode intermediate BMD frame directly in the pixels of the OpenCV MAT object
-		uint8_t* frameData = cvFrameYUV8.data;		
-		unsigned long writeByteIdx = 0;
-		unsigned long readByteIdx = 0;		
-		for (writeByteIdx = 0; writeByteIdx < 2*(frameHeight * frameWidth); ++writeByteIdx) {
-
-			*frameData = (uint8_t) * ((CHAR*)m_deckLinkBuffer);
-			++frameData;
-			++m_deckLinkBuffer;
-		}	
-
-		// convert YUV 4:2:2 to BGR in OpenCV
-		cv::cvtColor(cvFrameYUV8, cvFrameBGR8, cv::COLOR_YUV2BGR_UYVY);
-
-		// save the frame to file
-		cv::imwrite("C:\\Users\\f002r5k\\Desktop\\test.tif", cvFrameBGR8);
+		// Save the LEFT frame (8 bit)
+		cv::Mat cvFrameBGR8_L(frameHeight, frameWidth, CV_8UC3);
+		extractCVMat8((IDeckLinkVideoFrame*)videoFrame, &cvFrameBGR8_L);
+		cv::imwrite("C:\\Users\\f002r5k\\Desktop\\test8_L.tif", cvFrameBGR8_L);
 		
+		// and for our next trick,
+		// extract the RIGHT frame
+		IDeckLinkVideoFrame3DExtensions* videoFrameExtensions = NULL;
+		IDeckLinkVideoFrame* videoFrameRight = NULL;
+		result = videoFrame->QueryInterface(IID_IDeckLinkVideoFrame3DExtensions, (void**)&videoFrameExtensions);
+		if (result != S_OK) {
+			fprintf(stderr, "Could not retrieve 3D extensions object...\n");
+		}
+		result = videoFrameExtensions->GetFrameForRightEye(&videoFrameRight);
+		if (result != S_OK) {
+			fprintf(stderr, "Could not retrieve right eye frame...\n");
+		}
+		
+		// Save the RIGHT frame (8 bit)
+		cv::Mat cvFrameBGR8_R(frameHeight, frameWidth, CV_8UC3);
+		extractCVMat8((IDeckLinkVideoFrame*)videoFrameRight, &cvFrameBGR8_R);
+		cv::imwrite("C:\\Users\\f002r5k\\Desktop\\test8_R.tif", cvFrameBGR8_R);
+
+		// put away right eye frame objects
+		videoFrameRight->Release();
+		videoFrameExtensions->Release();
+
+
 		// try 10 bit
+		Xle10VideoFrame* m_newFrameXLE = NULL;
 		m_newFrameXLE = new Xle10VideoFrame(videoFrame->GetWidth(), videoFrame->GetHeight(), videoFrame->GetFlags());
 		m_frameConverter->ConvertFrame((IDeckLinkVideoFrame*)videoFrame, m_newFrameXLE);
 		printf("Pixel format after BMD frame conversion: 0x%0X\n", m_newFrameXLE->GetPixelFormat());  // this check is really a bit silly, we directly set this value in our own frame class...
@@ -430,6 +485,12 @@ public:
 
 		// save the frame to file
 		cv::imwrite("C:\\Users\\f002r5k\\Desktop\\test16.tif", cvFrameBGR16);
+
+
+
+		// and do something with it...
+
+
 
 		// hang here, for now...
 		// TODO: stream to video file, and make sure we release everything properly in the destructor
@@ -483,8 +544,8 @@ private:
 	std::mutex										m_mutex;
 	std::condition_variable							m_signalCondition;
 	IDeckLinkVideoConversion* m_frameConverter = NULL;
-	Uyvy8VideoFrame* m_newFrame = NULL;
-	Xle10VideoFrame* m_newFrameXLE = NULL;
+	//Uyvy8VideoFrame* m_newFrame = NULL;
+	//Xle10VideoFrame* m_newFrameXLE = NULL;
 	CHAR* m_deckLinkBuffer = NULL;
 
 };
