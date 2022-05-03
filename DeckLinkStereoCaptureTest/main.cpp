@@ -1,4 +1,4 @@
-// single-channel video capture test
+// dual-channel (stereo) video capture test
 #include <iostream>
 #include <opencv2/opencv.hpp>
 #include "platform.h"
@@ -120,7 +120,7 @@ private:
 class DeckLinkDevice
 {
 public:
-	DeckLinkDevice() :
+	DeckLinkDevice() : // what follows is a constructor initialization list: https://en.cppreference.com/w/cpp/language/constructor
 		m_index(0),
 		m_deckLink(nullptr),
 		m_deckLinkConfig(nullptr),
@@ -128,7 +128,11 @@ public:
 		m_deckLinkNotification(nullptr),
 		m_notificationCallback(nullptr),
 		m_deckLinkInput(nullptr),
-		m_inputCallback(nullptr)
+		m_inputCallback(nullptr),
+		m_deckLinkOutput(nullptr),
+		m_frameConverter(nullptr),
+		m_deckLinkBuffer(nullptr)
+		//m_outputCallback(nullptr)
 	{
 	}
 
@@ -144,8 +148,6 @@ public:
 		} else {
 			printf("Converter initialized!\n");
 		}
-
-
 
 		//BSTR deckLinkDisplayName;
 		//deckLink->GetDisplayName(&deckLinkDisplayName);
@@ -181,7 +183,6 @@ public:
 			fprintf(stderr, "Could not set capture group - result = %08x\n", result);
 			goto bail;
 		}
-
 
 		// Obtain the status interface for the DeckLink device
 		result = m_deckLink->QueryInterface(IID_IDeckLinkStatus, (void**)&m_deckLinkStatus);
@@ -273,7 +274,7 @@ public:
 
 	HRESULT prepareForCapture()
 	{
-		// Enable video output
+		// Enable video input
 		HRESULT result = m_deckLinkInput->EnableVideoInput(kDisplayMode, kPixelFormat, kInputFlag);
 		if (result != S_OK)
 		{
@@ -335,6 +336,7 @@ public:
 		Uyvy8VideoFrame* uyuv8Frame = NULL;
 		uyuv8Frame = new Uyvy8VideoFrame(frameWidth, frameHeight, videoFrame->GetFlags());
 		m_frameConverter->ConvertFrame((IDeckLinkVideoFrame*)videoFrame, uyuv8Frame);
+		m_frameConverter->Release();
 		//printf("Pixel format after BMD frame conversion: 0x%0X\n", uyuv8Frame->GetPixelFormat());  // this check is really a bit silly, we directly set this value in our own frame class...
 
 		// assign pointer to raw pixel bytes in the new frame
@@ -373,6 +375,7 @@ public:
 		Xle10VideoFrame* xle10Frame = NULL;
 		xle10Frame = new Xle10VideoFrame(frameWidth, frameHeight, videoFrame->GetFlags());
 		m_frameConverter->ConvertFrame((IDeckLinkVideoFrame*)videoFrame, xle10Frame);
+		m_frameConverter->Release();
 		//printf("Pixel format after BMD frame conversion: 0x%0X\n", m_newFrameXLE->GetPixelFormat());  // this check is really a bit silly, we directly set this value in our own frame class...
 
 		// assign pointer to raw pixel bytes in the new frame
@@ -524,29 +527,31 @@ public:
 		if (m_deckLinkInput)
 			m_deckLinkInput->Release();
 
+		if (m_deckLinkOutput)
+			m_deckLinkOutput->Release();
+
 		if (m_deckLinkNotification)
 			m_deckLinkNotification->Release();
 
 		if(m_frameConverter)
 			m_frameConverter->Release();
+
 	}
 
 private:
-	unsigned						                m_index;
-	IDeckLink* m_deckLink;
-	IDeckLinkConfiguration* m_deckLinkConfig;
-	IDeckLinkStatus* m_deckLinkStatus;
-	IDeckLinkNotification* m_deckLinkNotification;
-	NotificationCallback* m_notificationCallback;
-	IDeckLinkInput* m_deckLinkInput;
-	InputCallback* m_inputCallback;
-	std::mutex										m_mutex;
-	std::condition_variable							m_signalCondition;
-	IDeckLinkVideoConversion* m_frameConverter = NULL;
-	//Uyvy8VideoFrame* m_newFrame = NULL;
-	//Xle10VideoFrame* m_newFrameXLE = NULL;
-	CHAR* m_deckLinkBuffer = NULL;
-
+	unsigned					m_index;
+	IDeckLink*					m_deckLink;
+	IDeckLinkConfiguration*		m_deckLinkConfig;
+	IDeckLinkStatus*			m_deckLinkStatus;
+	IDeckLinkNotification*		m_deckLinkNotification;
+	NotificationCallback*		m_notificationCallback;
+	IDeckLinkInput*				m_deckLinkInput;
+	IDeckLinkOutput*			m_deckLinkOutput;
+	InputCallback*				m_inputCallback;
+	std::mutex					m_mutex;
+	std::condition_variable		m_signalCondition;
+	IDeckLinkVideoConversion*	m_frameConverter;
+	CHAR*						m_deckLinkBuffer;
 };
 
 HRESULT InputCallback::VideoInputFormatChanged(BMDVideoInputFormatChangedEvents notificationEvents, IDeckLinkDisplayMode* newDisplayMode, BMDDetectedVideoInputFormatFlags detectedSignalFlags)
@@ -580,20 +585,17 @@ HRESULT NotificationCallback::Notify(BMDNotifications topic, uint64_t param1, ui
 
 int main(void) {
 
-
-	IDeckLinkIterator* deckLinkIterator = nullptr;
-	IDeckLink* deckLink = nullptr;
-	IDeckLink* deckLinkDiscard = nullptr;
-	DeckLinkDevice           device;
-	HRESULT                 result;
-	unsigned				index = 0;
-	unsigned int deckLinkCount = 0;
+	IDeckLinkIterator*	deckLinkIterator = nullptr;
+	IDeckLink*			deckLink = nullptr;
+	IDeckLink*			deckLinkDiscard = nullptr;
+	DeckLinkDevice      device;
+	HRESULT             result;
+	unsigned			index = 0;
+	unsigned int		deckLinkCount = 0;
 
 	Initialize();
 
 	cout << "Hello, world!" << endl;
-
-
 
 	// Create an IDeckLinkIterator object to enumerate all DeckLink cards in the system
 	result = GetDeckLinkIterator(&deckLinkIterator);
@@ -611,11 +613,9 @@ int main(void) {
 		goto bail;
 	}
 
-
 	BSTR deckLinkDisplayName;
 	deckLink->GetDisplayName(&deckLinkDisplayName);
 	fprintf(stdout, "Got a DeckLink device: %S\n", CString(deckLinkDisplayName));
-
 
 	// Make sure we don't have another
 	result = deckLinkIterator->Next(&deckLinkDiscard);
@@ -628,26 +628,21 @@ int main(void) {
 		fprintf(stdout, "This is the only DeckLink device... good!\n");
 	}
 
-
+	// run all setup functions 
 	result = device.setup(deckLink, 0);
 	if (result != S_OK)
 		goto bail;
-
-	deckLink = nullptr;  // THIS TURNS OUT TO BE SUPER IMPORTANT, CAN'T DESTRUCT device PROPERLY WITHOUT IT!
+	deckLink = nullptr; // THIS TURNS OUT TO BE SUPER IMPORTANT, CAN'T DESTRUCT device PROPERLY WITHOUT IT! AND Release() ISN'T EQUIVALENT!
 
 	result = device.prepareForCapture();
 	if (result != S_OK)
 		goto bail;
-
 
 	// Wait for devices to lock to the signal
 	//fprintf(stdout,"Waiting for signal lock...\n");
 	//result = device.waitForSignalLock();
 	//if (result != S_OK)
 	//	goto bail;
-
-
-	
 
 	// Start capture - This only needs to be performed on one device in the group
 	fprintf(stdout, "Starting capture...\n");
